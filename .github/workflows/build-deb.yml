@@ -1,0 +1,67 @@
+name: Build SmartDialSIM G6.1 RootHide DEB
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bash curl sudo git make build-essential fakeroot rsync perl zip unzip libxml2 python3 dpkg file
+
+      - name: Install RootHide Theos
+        run: |
+          export THEOS="$HOME/theos"
+          echo "THEOS=$HOME/theos" >> "$GITHUB_ENV"
+          bash -c "$(curl -fsSL https://raw.githubusercontent.com/roothide/theos/master/bin/install-theos)"
+
+      - name: Verify G6.1 source
+        run: |
+          chmod +x VERIFY_G6.sh
+          ./VERIFY_G6.sh
+
+      - name: Build RootHide DEB
+        run: |
+          export THEOS="$HOME/theos"
+          make clean
+          make package FINALPACKAGE=1 DEBUG=0 -j$(nproc)
+
+      - name: Verify generated DEB
+        run: |
+          set -euo pipefail
+          mapfile -t DEBS < <(find packages -maxdepth 1 -type f -name '*.deb' -print)
+          test "${#DEBS[@]}" -ge 1
+          for deb in "${DEBS[@]}"; do
+            echo "=== $deb ==="
+            dpkg-deb -I "$deb"
+            dpkg-deb -c "$deb"
+            test "$(dpkg-deb -f "$deb" Package)" = "com.smartdialsim.tweak"
+            test "$(dpkg-deb -f "$deb" Version)" = "0.6.1-audit-fixed"
+            test "$(dpkg-deb -f "$deb" Architecture)" = "iphoneos-arm64e"
+            tmp="$(mktemp -d)"
+            dpkg-deb -x "$deb" "$tmp"
+            test -f "$tmp/Library/MobileSubstrate/DynamicLibraries/SmartDialSIM.dylib"
+            test -f "$tmp/Library/MobileSubstrate/DynamicLibraries/SmartDialSIM.plist"
+            test -f "$tmp/Library/PreferenceBundles/SmartDialSIMPrefs.bundle/SmartDialSIMPrefs"
+            test -f "$tmp/Library/PreferenceLoader/Preferences/SmartDialSIM.plist"
+            grep -q 'com.apple.mobilephone' "$tmp/Library/MobileSubstrate/DynamicLibraries/SmartDialSIM.plist"
+            ! grep -q 'REQUIRES_DEVICE_VERIFICATION.invalid' "$tmp/Library/MobileSubstrate/DynamicLibraries/SmartDialSIM.plist"
+            file "$tmp/Library/MobileSubstrate/DynamicLibraries/SmartDialSIM.dylib"
+            rm -rf "$tmp"
+          done
+
+      - name: Upload DEB
+        uses: actions/upload-artifact@v4
+        with:
+          name: SmartDialSIM-G6.1-Audit-Fixed-DEB
+          path: packages/*.deb
+          if-no-files-found: error
+          retention-days: 30
