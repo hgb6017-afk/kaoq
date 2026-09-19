@@ -1,67 +1,1039 @@
-name: Build SmartDialSIM G6.1 RootHide DEB
+#import "SDSDiagnosticReporter.h"
+#import "../Config/SDSConstants.h"
+#import "../Utilities/SDSLogger.h"
 
-on:
-  workflow_dispatch:
-  push:
-    branches: [ main, master ]
+#import <UIKit/UIKit.h>
+#import <CoreFoundation/CoreFoundation.h>
+#import <objc/runtime.h>
+#import <unistd.h>
+#import <stdlib.h>
 
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout source
-        uses: actions/checkout@v4
+static NSString * const SDSDiagnosticReportKey =
+    @"diagnosticReport";
 
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bash curl sudo git make build-essential fakeroot rsync perl zip unzip libxml2 python3 dpkg file
+static NSString * const SDSDiagnosticTimestampKey =
+    @"diagnosticTimestamp";
 
-      - name: Install RootHide Theos
-        run: |
-          export THEOS="$HOME/theos"
-          echo "THEOS=$HOME/theos" >> "$GITHUB_ENV"
-          bash -c "$(curl -fsSL https://raw.githubusercontent.com/roothide/theos/master/bin/install-theos)"
+static NSString * const SDSDiagnosticBundleIDKey =
+    @"diagnosticBundleID";
 
-      - name: Verify G6.1 source
-        run: |
-          chmod +x VERIFY_G6.sh
-          ./VERIFY_G6.sh
+static NSString * const SDSDiagnosticExecutableKey =
+    @"diagnosticExecutable";
 
-      - name: Build RootHide DEB
-        run: |
-          export THEOS="$HOME/theos"
-          make clean
-          make package FINALPACKAGE=1 DEBUG=0 -j$(nproc)
+static NSString * const SDSDiagnosticOSKey =
+    @"diagnosticOS";
 
-      - name: Verify generated DEB
-        run: |
-          set -euo pipefail
-          mapfile -t DEBS < <(find packages -maxdepth 1 -type f -name '*.deb' -print)
-          test "${#DEBS[@]}" -ge 1
-          for deb in "${DEBS[@]}"; do
-            echo "=== $deb ==="
-            dpkg-deb -I "$deb"
-            dpkg-deb -c "$deb"
-            test "$(dpkg-deb -f "$deb" Package)" = "com.smartdialsim.tweak"
-            test "$(dpkg-deb -f "$deb" Version)" = "0.6.1-audit-fixed"
-            test "$(dpkg-deb -f "$deb" Architecture)" = "iphoneos-arm64e"
-            tmp="$(mktemp -d)"
-            dpkg-deb -x "$deb" "$tmp"
-            test -f "$tmp/Library/MobileSubstrate/DynamicLibraries/SmartDialSIM.dylib"
-            test -f "$tmp/Library/MobileSubstrate/DynamicLibraries/SmartDialSIM.plist"
-            test -f "$tmp/Library/PreferenceBundles/SmartDialSIMPrefs.bundle/SmartDialSIMPrefs"
-            test -f "$tmp/Library/PreferenceLoader/Preferences/SmartDialSIM.plist"
-            grep -q 'com.apple.mobilephone' "$tmp/Library/MobileSubstrate/DynamicLibraries/SmartDialSIM.plist"
-            ! grep -q 'REQUIRES_DEVICE_VERIFICATION.invalid' "$tmp/Library/MobileSubstrate/DynamicLibraries/SmartDialSIM.plist"
-            file "$tmp/Library/MobileSubstrate/DynamicLibraries/SmartDialSIM.dylib"
-            rm -rf "$tmp"
-          done
+static NSString * const SDSDiagnosticArmedKey =
+    @"diagnosticArmed";
 
-      - name: Upload DEB
-        uses: actions/upload-artifact@v4
-        with:
-          name: SmartDialSIM-G6.1-Audit-Fixed-DEB
-          path: packages/*.deb
-          if-no-files-found: error
-          retention-days: 30
+static CFStringRef const SDSDiagnosticRequestNotification =
+    CFSTR("com.smartdialsim.diagnostic.request");
+
+
+@interface SDSDiagnosticReporter ()
+
+@property(nonatomic, assign) BOOL started;
+@property(nonatomic, assign) BOOL burstScheduled;
+
+- (void)scheduleArmedBurstWithPrefix:(NSString *)prefix;
+
+@end
+
+
+@implementation SDSDiagnosticReporter
+
+
+#pragma mark - Singleton
+
++ (instancetype)sharedReporter {
+    static SDSDiagnosticReporter *reporter = nil;
+    static dispatch_once_t onceToken;
+
+    dispatch_once(&onceToken, ^{
+        reporter = [[self alloc] init];
+    });
+
+    return reporter;
+}
+
+
+#pragma mark - Darwin notification
+
+static void SDSDiagnosticDarwinCallback(
+    CFNotificationCenterRef center,
+    void *observer,
+    CFStringRef name,
+    const void *object,
+    CFDictionaryRef userInfo
+) {
+    (void)center;
+    (void)name;
+    (void)object;
+    (void)userInfo;
+
+    SDSDiagnosticReporter *reporter =
+        (__bridge SDSDiagnosticReporter *)observer;
+
+    if (!reporter) {
+        return;
+    }
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [reporter scheduleArmedBurstWithPrefix:@"manual"];
+    });
+}
+
+
+#pragma mark - Lifecycle
+
+- (void)start {
+    if (self.started) {
+        return;
+    }
+
+    self.started = YES;
+
+    [[NSNotificationCenter defaultCenter]
+        addObserver:self
+           selector:@selector(applicationDidBecomeActive:)
+               name:UIApplicationDidBecomeActiveNotification
+             object:nil];
+
+    CFNotificationCenterAddObserver(
+        CFNotificationCenterGetDarwinNotifyCenter(),
+        (__bridge const void *)(self),
+        SDSDiagnosticDarwinCallback,
+        SDSDiagnosticRequestNotification,
+        NULL,
+        CFNotificationSuspensionBehaviorDeliverImmediately
+    );
+
+    [self scheduleArmedBurstWithPrefix:@"startup"];
+
+    SDSLogInfo(
+        SDSLogCategoryLifecycle,
+        @"Diagnostic reporter armed-on-demand; idle during normal Phone use"
+    );
+}
+
+
+- (void)applicationDidBecomeActive:(NSNotification *)notification {
+    (void)notification;
+
+    [self scheduleArmedBurstWithPrefix:@"phone-active"];
+}
+
+
+#pragma mark - Preferences
+
+- (BOOL)isDiagnosticArmed {
+    CFPreferencesAppSynchronize(
+        (__bridge CFStringRef)SDSPreferencesDomain
+    );
+
+    CFPropertyListRef copiedValue =
+        CFPreferencesCopyAppValue(
+            (__bridge CFStringRef)SDSDiagnosticArmedKey,
+            (__bridge CFStringRef)SDSPreferencesDomain
+        );
+
+    id value = CFBridgingRelease(copiedValue);
+
+    return
+        [value respondsToSelector:@selector(boolValue)] &&
+        [value boolValue];
+}
+
+
+#pragma mark - Capture scheduling
+
+- (void)scheduleArmedBurstWithPrefix:(NSString *)prefix {
+    if (![self isDiagnosticArmed]) {
+        return;
+    }
+
+    if (self.burstScheduled) {
+        return;
+    }
+
+    self.burstScheduled = YES;
+
+    NSArray<NSNumber *> *delays = @[
+        @0.8,
+        @3.0,
+        @6.0
+    ];
+
+    __weak typeof(self) weakSelf = self;
+
+    for (NSNumber *delay in delays) {
+        NSTimeInterval delaySeconds = delay.doubleValue;
+
+        dispatch_after(
+            dispatch_time(
+                DISPATCH_TIME_NOW,
+                (int64_t)(delaySeconds * NSEC_PER_SEC)
+            ),
+            dispatch_get_main_queue(),
+            ^{
+                __strong typeof(weakSelf) strongSelf = weakSelf;
+
+                if (!strongSelf) {
+                    return;
+                }
+
+                UIApplication *app =
+                    [UIApplication sharedApplication];
+
+                if (app.applicationState ==
+                    UIApplicationStateActive) {
+
+                    NSString *reason =
+                        [NSString stringWithFormat:
+                            @"%@+%.1fs",
+                            prefix ?: @"capture",
+                            delaySeconds];
+
+                    [strongSelf
+                        captureAndPersistWithReason:reason];
+                }
+
+                if ([delay isEqual:delays.lastObject]) {
+                    strongSelf.burstScheduled = NO;
+
+                    CFPreferencesSetAppValue(
+                        (__bridge CFStringRef)
+                            SDSDiagnosticArmedKey,
+                        kCFBooleanFalse,
+                        (__bridge CFStringRef)
+                            SDSPreferencesDomain
+                    );
+
+                    CFPreferencesAppSynchronize(
+                        (__bridge CFStringRef)
+                            SDSPreferencesDomain
+                    );
+                }
+            }
+        );
+    }
+}
+
+
+#pragma mark - Helpers
+
+static BOOL SDSStringMatches(
+    NSString *value,
+    NSString *pattern
+) {
+    if (value.length == 0 ||
+        pattern.length == 0) {
+        return NO;
+    }
+
+    NSRange range =
+        [value
+            rangeOfString:pattern
+                  options:
+                    NSRegularExpressionSearch |
+                    NSCaseInsensitiveSearch];
+
+    return range.location != NSNotFound;
+}
+
+
+static NSString *SDSMethodSummaryForClass(Class cls) {
+    if (!cls) {
+        return @"";
+    }
+
+    NSMutableArray<NSString *> *matches =
+        [NSMutableArray array];
+
+    NSString *pattern =
+        @"digit|dial|key|number|input|insert|append|"
+        @"delete|backspace|clear|erase|paste|call|sim|"
+        @"line|subscription|carrier|account|update|set";
+
+    unsigned int count = 0;
+
+    Method *methods =
+        class_copyMethodList(cls, &count);
+
+    if (methods) {
+        for (
+            unsigned int i = 0;
+            i < count && matches.count < 40;
+            i++
+        ) {
+            SEL selector =
+                method_getName(methods[i]);
+
+            NSString *name =
+                NSStringFromSelector(selector);
+
+            if (SDSStringMatches(name, pattern)) {
+                [matches addObject:name];
+            }
+        }
+
+        free(methods);
+    }
+
+    Class meta =
+        object_getClass(cls);
+
+    if (meta) {
+        count = 0;
+
+        Method *classMethods =
+            class_copyMethodList(meta, &count);
+
+        if (classMethods) {
+            for (
+                unsigned int i = 0;
+                i < count && matches.count < 40;
+                i++
+            ) {
+                SEL selector =
+                    method_getName(classMethods[i]);
+
+                NSString *selectorName =
+                    NSStringFromSelector(selector);
+
+                NSString *name =
+                    [@"+" stringByAppendingString:
+                        selectorName ?: @""];
+
+                if (SDSStringMatches(name, pattern)) {
+                    [matches addObject:name];
+                }
+            }
+
+            free(classMethods);
+        }
+    }
+
+    return
+        [matches
+            componentsJoinedByString:@", "];
+}
+
+
+static NSString *SDSSafeDiagnosticText(
+    NSString *text
+) {
+    if (text.length == 0) {
+        return @"";
+    }
+
+    NSString *lower =
+        text.lowercaseString;
+
+    NSArray<NSString *> *safeWords = @[
+        @"sim",
+        @"line",
+        @"keypad",
+        @"dial",
+        @"call",
+        @"delete",
+        @"backspace",
+        @"primary",
+        @"secondary",
+        @"cellular",
+        @"subscription"
+    ];
+
+    BOOL hasSafeWord = NO;
+
+    for (NSString *word in safeWords) {
+        if ([lower containsString:word]) {
+            hasSafeWord = YES;
+            break;
+        }
+    }
+
+    NSCharacterSet *digits =
+        [NSCharacterSet decimalDigitCharacterSet];
+
+    NSCharacterSet *allowed =
+        [NSCharacterSet
+            characterSetWithCharactersInString:
+                @" +-()./\u00a0\u202f*#"];
+
+    BOOL hasDigit = NO;
+    BOOL dialableOnly = YES;
+
+    for (
+        NSUInteger i = 0;
+        i < text.length;
+        i++
+    ) {
+        unichar c =
+            [text characterAtIndex:i];
+
+        if ([digits characterIsMember:c]) {
+            hasDigit = YES;
+            continue;
+        }
+
+        if (![allowed characterIsMember:c]) {
+            dialableOnly = NO;
+            break;
+        }
+    }
+
+    if (hasDigit && dialableOnly) {
+        return SDSMaskPhoneLikeText(text);
+    }
+
+    if (hasSafeWord) {
+        NSString *shortText = text;
+
+        if (text.length > 80) {
+            shortText =
+                [[text substringToIndex:80]
+                    stringByAppendingString:@"…"];
+        }
+
+        return
+            SDSMaskPhoneLikeText(shortText);
+    }
+
+    return
+        [NSString stringWithFormat:
+            @"<redacted len=%lu>",
+            (unsigned long)text.length];
+}
+
+
+#pragma mark - View hierarchy
+
+static void SDSAppendView(
+    NSMutableString *out,
+    UIView *view,
+    NSUInteger depth,
+    NSUInteger *budget
+) {
+    if (!out ||
+        !view ||
+        !budget ||
+        *budget == 0 ||
+        depth > 14) {
+        return;
+    }
+
+    (*budget)--;
+
+    NSMutableArray<NSString *> *texts =
+        [NSMutableArray array];
+
+    NSString *accessibility =
+        view.accessibilityLabel;
+
+    if (accessibility.length > 0) {
+        [texts addObject:
+            [NSString stringWithFormat:
+                @"a11y=\"%@\"",
+                SDSSafeDiagnosticText(
+                    accessibility
+                )]];
+    }
+
+    if ([view isKindOfClass:
+            [UILabel class]]) {
+
+        NSString *text =
+            ((UILabel *)view).text;
+
+        if (text.length > 0) {
+            [texts addObject:
+                [NSString stringWithFormat:
+                    @"text=\"%@\"",
+                    SDSSafeDiagnosticText(text)]];
+        }
+
+    } else if (
+        [view isKindOfClass:
+            [UIButton class]]
+    ) {
+
+        NSString *title =
+            [(UIButton *)view
+                titleForState:
+                    UIControlStateNormal];
+
+        if (title.length > 0) {
+            [texts addObject:
+                [NSString stringWithFormat:
+                    @"title=\"%@\"",
+                    SDSSafeDiagnosticText(title)]];
+        }
+
+    } else if (
+        [view isKindOfClass:
+            [UITextField class]]
+    ) {
+
+        NSString *text =
+            ((UITextField *)view).text;
+
+        if (text.length > 0) {
+            [texts addObject:
+                [NSString stringWithFormat:
+                    @"text=\"%@\"",
+                    SDSSafeDiagnosticText(text)]];
+        }
+
+    } else if (
+        [view isKindOfClass:
+            [UITextView class]]
+    ) {
+
+        NSString *text =
+            ((UITextView *)view).text;
+
+        if (text.length > 0) {
+            [texts addObject:
+                [NSString stringWithFormat:
+                    @"text=\"%@\"",
+                    SDSSafeDiagnosticText(text)]];
+        }
+    }
+
+    CGRect frame = view.frame;
+
+    NSString *indent =
+        [@""
+            stringByPaddingToLength:
+                depth * 2
+            withString:@" "
+            startingAtIndex:0];
+
+    [out appendFormat:
+        @"%@VIEW %@ "
+         "frame=(%.0f,%.0f %.0fx%.0f) "
+         "hidden=%d alpha=%.2f %@\n",
+        indent,
+        NSStringFromClass(view.class),
+        frame.origin.x,
+        frame.origin.y,
+        frame.size.width,
+        frame.size.height,
+        view.hidden,
+        view.alpha,
+        [texts componentsJoinedByString:@" "]
+    ];
+
+    for (UIView *child in view.subviews) {
+        SDSAppendView(
+            out,
+            child,
+            depth + 1,
+            budget
+        );
+
+        if (*budget == 0) {
+            break;
+        }
+    }
+}
+
+
+static void SDSAppendController(
+    NSMutableString *out,
+    UIViewController *viewController,
+    NSUInteger depth,
+    NSUInteger *budget
+) {
+    if (!out ||
+        !viewController ||
+        !budget ||
+        *budget == 0 ||
+        depth > 12) {
+        return;
+    }
+
+    (*budget)--;
+
+    NSString *indent =
+        [@""
+            stringByPaddingToLength:
+                depth * 2
+            withString:@" "
+            startingAtIndex:0];
+
+    [out appendFormat:
+        @"%@VC %@\n",
+        indent,
+        NSStringFromClass(
+            viewController.class
+        )];
+
+    UIViewController *presented =
+        viewController.presentedViewController;
+
+    if (presented) {
+        NSString *presentedIndent =
+            [@""
+                stringByPaddingToLength:
+                    (depth + 1) * 2
+                withString:@" "
+                startingAtIndex:0];
+
+        [out appendFormat:
+            @"%@presented:\n",
+            presentedIndent];
+
+        SDSAppendController(
+            out,
+            presented,
+            depth + 2,
+            budget
+        );
+    }
+
+    for (
+        UIViewController *child
+        in viewController.childViewControllers
+    ) {
+        SDSAppendController(
+            out,
+            child,
+            depth + 1,
+            budget
+        );
+
+        if (*budget == 0) {
+            break;
+        }
+    }
+}
+
+
+#pragma mark - Window discovery
+
+static NSArray<UIWindow *> *
+SDSActiveWindows(void) {
+
+    UIApplication *app =
+        [UIApplication sharedApplication];
+
+    NSMutableArray<UIWindow *> *windows =
+        [NSMutableArray array];
+
+    /*
+     * SmartDialSIM deploy target >= iOS 15.
+     *
+     * Không dùng UIApplication.windows vì API đó
+     * bị deprecated từ iOS 15 và project bật -Werror.
+     *
+     * Chỉ lấy window thông qua UIWindowScene.windows.
+     */
+
+    NSSet<UIScene *> *connectedScenes =
+        app.connectedScenes;
+
+    for (UIScene *scene in connectedScenes) {
+        if (![scene isKindOfClass:
+                [UIWindowScene class]]) {
+            continue;
+        }
+
+        UIWindowScene *windowScene =
+            (UIWindowScene *)scene;
+
+        for (
+            UIWindow *window
+            in windowScene.windows
+        ) {
+            if (window) {
+                [windows addObject:window];
+            }
+        }
+    }
+
+    /*
+     * Ưu tiên key window lên đầu để report
+     * dễ đọc hơn, nhưng vẫn giữ các window khác.
+     */
+    [windows sortUsingComparator:
+        ^NSComparisonResult(
+            UIWindow *a,
+            UIWindow *b
+        ) {
+            if (a.isKeyWindow ==
+                b.isKeyWindow) {
+                return NSOrderedSame;
+            }
+
+            return a.isKeyWindow
+                ? NSOrderedAscending
+                : NSOrderedDescending;
+        }];
+
+    return windows;
+}
+
+
+#pragma mark - Report
+
+- (NSString *)buildReportForReason:
+    (NSString *)reason {
+
+    NSMutableString *out =
+        [NSMutableString string];
+
+    NSBundle *bundle =
+        [NSBundle mainBundle];
+
+    NSString *bundleID =
+        bundle.bundleIdentifier ?: @"<nil>";
+
+    NSString *executable =
+        bundle.executablePath
+            .lastPathComponent ?: @"<nil>";
+
+    NSOperatingSystemVersion os =
+        [NSProcessInfo processInfo]
+            .operatingSystemVersion;
+
+    [out appendFormat:
+        @"SmartDialSIM G6.1 "
+         "AUDIT-FIXED DIAGNOSTIC\n"
+         "reason=%@\n"
+         "os=%ld.%ld.%ld\n"
+         "bundle=%@\n"
+         "executable=%@\n"
+         "pid=%d\n",
+        reason ?: @"unknown",
+        (long)os.majorVersion,
+        (long)os.minorVersion,
+        (long)os.patchVersion,
+        bundleID,
+        executable,
+        getpid()
+    ];
+
+
+    /*
+     * WINDOWS / CONTROLLERS / VIEWS
+     */
+
+    [out appendString:
+        @"\n"
+         "=== WINDOWS / CONTROLLERS / "
+         "VIEWS ===\n"];
+
+    NSArray<UIWindow *> *windows =
+        SDSActiveWindows();
+
+    [out appendFormat:
+        @"windowCount=%lu\n",
+        (unsigned long)windows.count];
+
+    NSUInteger windowIndex = 0;
+
+    for (UIWindow *window in windows) {
+        [out appendFormat:
+            @"\nWINDOW[%lu] %@ key=%d\n",
+            (unsigned long)windowIndex++,
+            NSStringFromClass(
+                window.class
+            ),
+            window.isKeyWindow
+        ];
+
+        NSUInteger controllerBudget = 80;
+
+        SDSAppendController(
+            out,
+            window.rootViewController,
+            0,
+            &controllerBudget
+        );
+
+        NSUInteger viewBudget = 320;
+
+        SDSAppendView(
+            out,
+            window,
+            0,
+            &viewBudget
+        );
+    }
+
+
+    /*
+     * OBJECTIVE-C RUNTIME
+     */
+
+    [out appendString:
+        @"\n"
+         "=== INTERESTING OBJC "
+         "CLASSES / METHODS ===\n"];
+
+    NSString *classPattern =
+        @"dial|dialer|keypad|key|number|"
+         "phone|call|recent|history|sim|"
+         "subscription|line|telephony|"
+         "contact";
+
+    int total =
+        objc_getClassList(NULL, 0);
+
+    Class *classes = NULL;
+
+    if (total > 0) {
+        classes =
+            (__unsafe_unretained Class *)
+            malloc(
+                sizeof(Class) *
+                (NSUInteger)total
+            );
+    }
+
+    int actual = 0;
+
+    if (classes) {
+        actual =
+            objc_getClassList(
+                classes,
+                total
+            );
+    }
+
+    NSUInteger emitted = 0;
+
+    for (
+        int i = 0;
+        i < actual && emitted < 220;
+        i++
+    ) {
+        Class cls =
+            classes[i];
+
+        if (!cls) {
+            continue;
+        }
+
+        NSString *name =
+            NSStringFromClass(cls);
+
+        if (!SDSStringMatches(
+                name,
+                classPattern)) {
+            continue;
+        }
+
+        const char *image =
+            class_getImageName(cls);
+
+        NSString *methods =
+            SDSMethodSummaryForClass(cls);
+
+        [out appendFormat:
+            @"CLASS %@ | image=%s\n",
+            name,
+            image ?: "<unknown>"
+        ];
+
+        if (methods.length > 0) {
+            [out appendFormat:
+                @"  METHODS %@\n",
+                methods
+            ];
+        }
+
+        emitted++;
+    }
+
+    if (classes) {
+        free(classes);
+    }
+
+    [out appendFormat:
+        @"interestingClassCount=%lu\n",
+        (unsigned long)emitted];
+
+    /*
+     * Mask số điện thoại có thể lọt vào
+     * report trước khi persist.
+     */
+
+    return SDSMaskPhoneLikeText(out);
+}
+
+
+#pragma mark - Persist
+
+- (void)captureAndPersistWithReason:
+    (NSString *)reason {
+
+    if (![NSThread isMainThread]) {
+        NSString *reasonCopy =
+            [reason copy];
+
+        dispatch_async(
+            dispatch_get_main_queue(),
+            ^{
+                [self
+                    captureAndPersistWithReason:
+                        reasonCopy];
+            }
+        );
+
+        return;
+    }
+
+    NSString *snapshot =
+        [self buildReportForReason:
+            reason ?: @"manual"];
+
+    CFPropertyListRef existingValue =
+        CFPreferencesCopyAppValue(
+            (__bridge CFStringRef)
+                SDSDiagnosticReportKey,
+            (__bridge CFStringRef)
+                SDSPreferencesDomain
+        );
+
+    NSString *existing =
+        CFBridgingRelease(existingValue);
+
+    if (existing.length > 90000) {
+        existing =
+            [existing
+                substringFromIndex:
+                    existing.length -
+                    70000];
+    }
+
+    NSString *combined = nil;
+
+    if (existing.length > 0) {
+        combined =
+            [NSString stringWithFormat:
+                @"%@\n\n"
+                 "=============================="
+                 "\n\n%@",
+                existing,
+                snapshot];
+    } else {
+        combined =
+            snapshot ?: @"";
+    }
+
+
+    NSDateFormatter *formatter =
+        [[NSDateFormatter alloc] init];
+
+    formatter.locale =
+        [NSLocale
+            localeWithLocaleIdentifier:
+                @"en_US_POSIX"];
+
+    formatter.dateFormat =
+        @"yyyy-MM-dd HH:mm:ss Z";
+
+    NSString *timestamp =
+        [formatter
+            stringFromDate:[NSDate date]];
+
+
+    NSBundle *bundle =
+        [NSBundle mainBundle];
+
+    NSOperatingSystemVersion os =
+        [NSProcessInfo processInfo]
+            .operatingSystemVersion;
+
+    NSString *osString =
+        [NSString stringWithFormat:
+            @"%ld.%ld.%ld",
+            (long)os.majorVersion,
+            (long)os.minorVersion,
+            (long)os.patchVersion];
+
+
+    CFPreferencesSetAppValue(
+        (__bridge CFStringRef)
+            SDSDiagnosticReportKey,
+        (__bridge CFPropertyListRef)
+            combined,
+        (__bridge CFStringRef)
+            SDSPreferencesDomain
+    );
+
+    CFPreferencesSetAppValue(
+        (__bridge CFStringRef)
+            SDSDiagnosticTimestampKey,
+        (__bridge CFPropertyListRef)
+            timestamp,
+        (__bridge CFStringRef)
+            SDSPreferencesDomain
+    );
+
+    NSString *bundleIdentifier =
+        bundle.bundleIdentifier ?: @"<nil>";
+
+    CFPreferencesSetAppValue(
+        (__bridge CFStringRef)
+            SDSDiagnosticBundleIDKey,
+        (__bridge CFPropertyListRef)
+            bundleIdentifier,
+        (__bridge CFStringRef)
+            SDSPreferencesDomain
+    );
+
+    NSString *executable =
+        bundle.executablePath
+            .lastPathComponent ?: @"<nil>";
+
+    CFPreferencesSetAppValue(
+        (__bridge CFStringRef)
+            SDSDiagnosticExecutableKey,
+        (__bridge CFPropertyListRef)
+            executable,
+        (__bridge CFStringRef)
+            SDSPreferencesDomain
+    );
+
+    CFPreferencesSetAppValue(
+        (__bridge CFStringRef)
+            SDSDiagnosticOSKey,
+        (__bridge CFPropertyListRef)
+            osString,
+        (__bridge CFStringRef)
+            SDSPreferencesDomain
+    );
+
+    CFPreferencesAppSynchronize(
+        (__bridge CFStringRef)
+            SDSPreferencesDomain
+    );
+
+    SDSLogInfo(
+        SDSLogCategoryHook,
+        @"Diagnostic snapshot persisted (%@)",
+        reason ?: @"manual"
+    );
+}
+
+
+#pragma mark - Cleanup
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter]
+        removeObserver:self];
+
+    CFNotificationCenterRemoveObserver(
+        CFNotificationCenterGetDarwinNotifyCenter(),
+        (__bridge const void *)(self),
+        SDSDiagnosticRequestNotification,
+        NULL
+    );
+}
+
+
+@end
