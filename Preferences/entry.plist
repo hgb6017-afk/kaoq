@@ -1,0 +1,7 @@
+{
+    entry = {
+        bundle = SmartDialSIMPrefs;
+        cell = PSLinkCell;
+        label = SmartDialSIM;
+    };
+}

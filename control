@@ -1,0 +1,9 @@
+Package: com.smartdialsim.tweak
+Name: SmartDialSIM
+Version: 0.6.1-audit-fixed
+Architecture: iphoneos-arm64e
+Depends: mobilesubstrate, preferenceloader, firmware (>= 15.0)
+Description: Audit-fixed adaptive Smart Dial + Contacts + runtime-checked Call History + T9 + compact SIM presentation candidate for Apple Phone on iOS 15.x and iOS 16.2 RootHide. Diagnostics are on-demand and privacy-redacted.
+Maintainer: Local Development
+Author: Local Development
+Section: Tweaks

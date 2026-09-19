@@ -1,0 +1,204 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<array>
+	<dict>
+		<key>cell</key>
+		<string>PSGroupCell</string>
+		<key>label</key>
+		<string>SmartDialSIM</string>
+		<key>footerText</key>
+		<string>SmartDialSIM G6.1 Audit-Fixed Candidate: Smart Dial, Contacts, lịch sử cuộc gọi, T9 và giao diện SIM đều chạy trực tiếp trong Phone. Không gửi dữ liệu ra mạng và không tự thực hiện cuộc gọi.</string>
+	</dict>
+	<dict>
+		<key>cell</key>
+		<string>PSSwitchCell</string>
+		<key>label</key>
+		<string>Bật tweak</string>
+		<key>key</key>
+		<string>enabled</string>
+		<key>default</key>
+		<true/>
+		<key>defaults</key>
+		<string>com.smartdialsim.preferences</string>
+		<key>PostNotification</key>
+		<string>com.smartdialsim.preferences.changed</string>
+	</dict>
+	<dict>
+		<key>cell</key>
+		<string>PSGroupCell</string>
+		<key>label</key>
+		<string>Smart Dial</string>
+	</dict>
+	<dict>
+		<key>cell</key>
+		<string>PSSwitchCell</string>
+		<key>label</key>
+		<string>Bật Smart Dial</string>
+		<key>key</key>
+		<string>smartDialEnabled</string>
+		<key>default</key>
+		<true/>
+		<key>defaults</key>
+		<string>com.smartdialsim.preferences</string>
+		<key>PostNotification</key>
+		<string>com.smartdialsim.preferences.changed</string>
+	</dict>
+	<dict>
+		<key>cell</key>
+		<string>PSSwitchCell</string>
+		<key>label</key>
+		<string>Tìm trong danh bạ</string>
+		<key>key</key>
+		<string>contactsEnabled</string>
+		<key>default</key>
+		<true/>
+		<key>defaults</key>
+		<string>com.smartdialsim.preferences</string>
+		<key>PostNotification</key>
+		<string>com.smartdialsim.preferences.changed</string>
+	</dict>
+	<dict>
+		<key>cell</key>
+		<string>PSSwitchCell</string>
+		<key>label</key>
+		<string>Tìm trong lịch sử cuộc gọi</string>
+		<key>key</key>
+		<string>callHistoryEnabled</string>
+		<key>default</key>
+		<true/>
+		<key>defaults</key>
+		<string>com.smartdialsim.preferences</string>
+		<key>PostNotification</key>
+		<string>com.smartdialsim.preferences.changed</string>
+	</dict>
+	<dict>
+		<key>cell</key>
+		<string>PSSwitchCell</string>
+		<key>label</key>
+		<string>Tìm tên bằng T9</string>
+		<key>key</key>
+		<string>t9Enabled</string>
+		<key>default</key>
+		<false/>
+		<key>defaults</key>
+		<string>com.smartdialsim.preferences</string>
+		<key>PostNotification</key>
+		<string>com.smartdialsim.preferences.changed</string>
+	</dict>
+	<dict>
+		<key>cell</key>
+		<string>PSSliderCell</string>
+		<key>label</key>
+		<string>Số gợi ý tối đa</string>
+		<key>key</key>
+		<string>maxSuggestions</string>
+		<key>default</key>
+		<integer>3</integer>
+		<key>min</key>
+		<integer>1</integer>
+		<key>max</key>
+		<integer>5</integer>
+		<key>showValue</key>
+		<true/>
+		<key>defaults</key>
+		<string>com.smartdialsim.preferences</string>
+		<key>PostNotification</key>
+		<string>com.smartdialsim.preferences.changed</string>
+	</dict>
+	<dict>
+		<key>cell</key>
+		<string>PSGroupCell</string>
+		<key>label</key>
+		<string>SIM</string>
+	</dict>
+	<dict>
+		<key>cell</key>
+		<string>PSSwitchCell</string>
+		<key>label</key>
+		<string>Thu gọn bộ chọn SIM</string>
+		<key>key</key>
+		<string>compactSIMEnabled</string>
+		<key>default</key>
+		<true/>
+		<key>defaults</key>
+		<string>com.smartdialsim.preferences</string>
+		<key>PostNotification</key>
+		<string>com.smartdialsim.preferences.changed</string>
+	</dict>
+	<dict>
+		<key>cell</key>
+		<string>PSEditTextCell</string>
+		<key>label</key>
+		<string>Tên SIM 1</string>
+		<key>key</key>
+		<string>sim1Name</string>
+		<key>placeholder</key>
+		<string>SIM 1</string>
+		<key>defaults</key>
+		<string>com.smartdialsim.preferences</string>
+		<key>PostNotification</key>
+		<string>com.smartdialsim.preferences.changed</string>
+	</dict>
+	<dict>
+		<key>cell</key>
+		<string>PSEditTextCell</string>
+		<key>label</key>
+		<string>Tên SIM 2</string>
+		<key>key</key>
+		<string>sim2Name</string>
+		<key>placeholder</key>
+		<string>SIM 2</string>
+		<key>defaults</key>
+		<string>com.smartdialsim.preferences</string>
+		<key>PostNotification</key>
+		<string>com.smartdialsim.preferences.changed</string>
+	</dict>
+	<dict>
+		<key>cell</key>
+		<string>PSGroupCell</string>
+		<key>label</key>
+		<string>Kiểm tra một lần</string>
+		<key>footerText</key>
+		<string>G6 đã giữ chẩn đoán riêng tư bên trong bản full. Chỉ khi lần test duy nhất có lỗi, bấm Sao chép báo cáo và gửi cho ChatGPT; không cần cài lại bản diagnostic riêng.</string>
+	</dict>
+	<dict>
+		<key>cell</key>
+		<string>PSButtonCell</string>
+		<key>label</key>
+		<string>Ghi snapshot kiểm tra ngay</string>
+		<key>action</key>
+		<string>requestDiagnostics</string>
+	</dict>
+	<dict>
+		<key>cell</key>
+		<string>PSButtonCell</string>
+		<key>label</key>
+		<string>Sao chép báo cáo</string>
+		<key>action</key>
+		<string>copyDiagnostics</string>
+	</dict>
+	<dict>
+		<key>cell</key>
+		<string>PSButtonCell</string>
+		<key>label</key>
+		<string>Xóa báo cáo cũ</string>
+		<key>action</key>
+		<string>clearDiagnostics</string>
+	</dict>
+	<dict>
+		<key>cell</key>
+		<string>PSButtonCell</string>
+		<key>label</key>
+		<string>Khôi phục mặc định</string>
+		<key>action</key>
+		<string>resetPreferences</string>
+	</dict>
+	<dict>
+		<key>cell</key>
+		<string>PSGroupCell</string>
+		<key>footerText</key>
+		<string>Phiên bản 0.6.1-audit-fixed • iOS 15.x + iOS 16.2 • RootHide</string>
+	</dict>
+</array>
+</plist>
